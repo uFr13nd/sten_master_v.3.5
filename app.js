@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const API_URL = 'https://script.google.com/macros/s/AKfycbwvCgR_FeVh3QkKc6u1UaxYkAFQbQkFJ6j39XxsRHeoOfTHBJHW02hTpgvRIoI-r5kD/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbycm7-F4_Go9kNuFz34hTC1yWvDxDkQe1WkfwXAJgQXQaOi9fiWibtjqt9h63lRJf0A/exec';
   const FALLBACK = window.STEN_FALLBACK_DATA;
   const Engine = window.StenEngine;
   const STORAGE_KEY = 'sten-master-web-v38-state';
