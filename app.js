@@ -17,6 +17,7 @@
   let results = [];
   let historyData = null;
   let historySelection = new Set();
+  const pricingDrafts = new Map();
   let admin = {
     connected: false,
     token: sessionStorage.getItem('sten_admin_token') || '',
@@ -206,6 +207,54 @@
     $$('[data-open-cert-tab]').forEach(b=>b.onclick=()=>{setActiveTab('certificates');$('#certificateSearch').value=b.dataset.openCertTab;renderCertificates();});
   }
 
+  function pricingSourceByCode(code){
+    return (model.works||[]).find(x=>x.code===code) || (model.materials||[]).find(x=>x.code===code) || null;
+  }
+
+  function pricingDraftKey(code,field){return `${code}::${field}`;}
+  function pricingDraftValue(code,field,fallback){
+    const key=pricingDraftKey(code,field);
+    return pricingDrafts.has(key)?pricingDrafts.get(key):fallback;
+  }
+  function normalizedPricingValue(field,value){return field==='price'?Number(value):String(value??'');}
+  function sourcePricingValue(source,field){
+    if(field==='technicalGroup') return source.technicalGroup;
+    if(field==='purchaseGroup') return source.purchaseGroup;
+    return source.price;
+  }
+  function valuesDiffer(field,a,b){
+    if(field==='price') return Math.abs((Number(a)||0)-(Number(b)||0))>1e-9;
+    return String(a??'')!==String(b??'');
+  }
+  function setPricingDraft(code,field,value){
+    const source=pricingSourceByCode(code); if(!source) return;
+    const normalized=normalizedPricingValue(field,value);
+    if(valuesDiffer(field,normalized,sourcePricingValue(source,field))) pricingDrafts.set(pricingDraftKey(code,field),normalized);
+    else pricingDrafts.delete(pricingDraftKey(code,field));
+    updatePricingDirtyState();
+  }
+  function collectPricingChanges(){
+    const changes=[];
+    for(const [key,value] of pricingDrafts.entries()){
+      const sep=key.indexOf('::'); if(sep<0) continue;
+      const code=key.slice(0,sep), field=key.slice(sep+2), source=pricingSourceByCode(code); if(!source) continue;
+      if(!valuesDiffer(field,value,sourcePricingValue(source,field))) continue;
+      changes.push({sheet:code.startsWith('W-')?'Работы':'Материалы',code,field,value});
+    }
+    return changes;
+  }
+  function updatePricingDirtyState(){
+    const changes=collectPricingChanges();
+    const btn=$('#saveAllPricingBtn'), count=$('#pricingDirtyCount'), hint=$('#pricingSaveHint');
+    if(btn){btn.classList.toggle('hidden',!admin.connected);btn.disabled=!admin.connected||!changes.length;}
+    if(count) count.textContent=String(changes.length);
+    if(hint) hint.textContent=changes.length?`Несохранённых изменений: ${changes.length}`:'Все изменения сохранены';
+    $$('[data-price-row]').forEach(tr=>{
+      const code=tr.dataset.priceRow;
+      tr.classList.toggle('dirty-row',changes.some(ch=>ch.code===code));
+    });
+  }
+
   function renderPricing(){
     const q=($('#priceSearch')?.value||'').trim().toLowerCase(), type=$('#priceType')?.value||'all', purchase=$('#pricePurchase')?.value||'all';
     let rows=[];
@@ -214,44 +263,42 @@
     rows=rows.filter(x=>(!q || `${x.code} ${x.name} ${x.technicalGroup}`.toLowerCase().includes(q)) && (purchase==='all'||x.purchaseGroup===purchase));
     const techGroups=[...new Set((model.materials||[]).map(x=>x.technicalGroup).filter(Boolean))].sort();
     const workGroups=[...new Set((model.works||[]).map(x=>x.technicalGroup).filter(Boolean))].sort();
-    $('#pricingTable').innerHTML=`<table class="data-table"><thead><tr><th>Код</th><th>Наименование</th><th>Ед.</th><th>${type==='works'?'Цена':'Цена с НДС и доставкой'}</th><th>Группа</th><th>Закупка</th><th>Где используется</th>${admin.connected?'<th></th>':''}</tr></thead><tbody>${rows.map(x=>{
+    $('#pricingTable').innerHTML=`<table class="data-table"><thead><tr><th>Код</th><th>Наименование</th><th>Ед.</th><th>${type==='works'?'Цена':'Цена с НДС и доставкой'}</th><th>Группа</th><th>Закупка</th><th>Где используется</th></tr></thead><tbody>${rows.map(x=>{
       const strategic=x.purchaseGroup==='Стратегические материалы';
       const groups=x._kind==='works'?workGroups:techGroups;
-      return `<tr class="${strategic?'strategic-row':''}" data-price-row="${esc(x.code)}" data-kind="${x._kind}">
+      const price=pricingDraftValue(x.code,'price',x.price), technicalGroup=pricingDraftValue(x.code,'technicalGroup',x.technicalGroup), purchaseGroup=pricingDraftValue(x.code,'purchaseGroup',x.purchaseGroup);
+      const rowDirty=[['price',price],['technicalGroup',technicalGroup],...(x._kind==='materials'?[['purchaseGroup',purchaseGroup]]:[])].some(([f,v])=>valuesDiffer(f,v,sourcePricingValue(x,f)));
+      return `<tr class="${strategic?'strategic-row ':''}${rowDirty?'dirty-row':''}" data-price-row="${esc(x.code)}" data-kind="${x._kind}">
         <td>${esc(x.code)}</td><td>${esc(x.name)}</td><td>${esc(x.unit)}</td>
-        <td>${admin.connected?`<input class="editable price-input" data-field="price" type="number" step="0.01" value="${esc(x.price)}">`:`<span class="num">${fmtRub(x.price,2)}</span>`}</td>
-        <td>${admin.connected?`<select class="editable group-select" data-field="technicalGroup">${groups.map(g=>`<option ${g===x.technicalGroup?'selected':''}>${esc(g)}</option>`).join('')}</select>`:esc(x.technicalGroup)}</td>
-        <td>${x._kind==='materials'?(admin.connected?`<select class="editable group-select" data-field="purchaseGroup"><option ${x.purchaseGroup==='Обычные материалы'?'selected':''}>Обычные материалы</option><option ${strategic?'selected':''}>Стратегические материалы</option></select>`:(strategic?'<span class="badge strategic">Стратегический</span>':'Обычный')):'—'}</td>
+        <td>${admin.connected?`<input class="editable price-input" data-field="price" type="number" step="0.01" value="${esc(price)}">`:`<span class="num">${fmtRub(x.price,2)}</span>`}</td>
+        <td>${admin.connected?`<select class="editable group-select" data-field="technicalGroup">${groups.map(g=>`<option ${g===technicalGroup?'selected':''}>${esc(g)}</option>`).join('')}</select>`:esc(x.technicalGroup)}</td>
+        <td>${x._kind==='materials'?(admin.connected?`<select class="editable group-select" data-field="purchaseGroup"><option ${purchaseGroup==='Обычные материалы'?'selected':''}>Обычные материалы</option><option ${purchaseGroup==='Стратегические материалы'?'selected':''}>Стратегические материалы</option></select>`:(strategic?'<span class="badge strategic">Стратегический</span>':'Обычный')):'—'}</td>
         <td title="${esc(x.usage||'')}">${esc(shortUsage(x.usage))}</td>
-        ${admin.connected?`<td><button class="btn btn-outline save-row" data-save-ref="${esc(x.code)}">Сохранить</button></td>`:''}
       </tr>`;
     }).join('')}</tbody></table>`;
-    $$('[data-save-ref]').forEach(btn=>btn.onclick=()=>saveReferenceRow(btn.dataset.saveRef));
+    $$('[data-price-row] [data-field]').forEach(el=>{
+      const tr=el.closest('[data-price-row]'), code=tr.dataset.priceRow, field=el.dataset.field;
+      const evt=el.tagName==='INPUT'?'input':'change';
+      el.addEventListener(evt,()=>setPricingDraft(code,field,el.value));
+    });
+    updatePricingDirtyState();
   }
 
-  async function saveReferenceRow(code){
+  async function saveAllReferenceChanges(){
     if(!admin.connected){goAdmin('Подключите администратора для изменения расценок.');return;}
-    const tr=document.querySelector(`[data-price-row="${cssEscape(code)}"]`); if(!tr) return;
-    const kind=tr.dataset.kind, sheet=kind==='works'?'Работы':'Материалы';
-    const source=(kind==='works'?model.works:model.materials).find(x=>x.code===code); if(!source) return;
-    const changes=[];
-    tr.querySelectorAll('[data-field]').forEach(el=>{
-      const f=el.dataset.field, val=f==='price'?Number(el.value):el.value;
-      const src=f==='technicalGroup'?source.technicalGroup:f==='purchaseGroup'?source.purchaseGroup:source.price;
-      if(String(val)!==String(src)) changes.push({field:f,value:val});
-    });
-    if(!changes.length){toast('Изменений нет.');return;}
+    const changes=collectPricingChanges();
+    if(!changes.length){toast('Изменений для сохранения нет.');return;}
     setBusy(true);
     try{
-      for(const ch of changes){
-        const resp=await apiPost({action:'updateReference',token:admin.token,actor:admin.actor,sheet,code,field:ch.field,value:ch.value});
-        if(!resp.ok) throw new Error(resp.error||'Ошибка обновления');
-        if(resp.data) applyRemoteModel(resp.data);
-        if(resp.audit) admin.audit=resp.audit;
-      }
-      toast(`Сохранено: ${code}`,'success'); renderAll();
+      const resp=await apiPost({action:'updateReferencesBatch',token:admin.token,actor:admin.actor,changes});
+      if(!resp.ok) throw new Error(resp.error||'Ошибка массового сохранения');
+      if(resp.data) applyRemoteModel(resp.data);
+      if(resp.audit) admin.audit=resp.audit;
+      pricingDrafts.clear();
+      toast(`Сохранено изменений: ${resp.updatedCount??changes.length}`,'success');
+      renderAll();
     }catch(err){toast(err.message,'error');}
-    finally{setBusy(false);}
+    finally{setBusy(false);updatePricingDirtyState();}
   }
 
   function renderHistoryPicker(){
@@ -385,7 +432,7 @@
     }catch(err){admin.connected=false;renderAdmin();toast(err.message,'error');}
     finally{setBusy(false);}
   }
-  function adminLogout(){admin.connected=false;admin.token='';admin.actor='';admin.audit=[];admin.control=[];sessionStorage.removeItem('sten_admin_token');sessionStorage.removeItem('sten_admin_actor');renderAll();toast('Администратор отключён.');}
+  function adminLogout(){admin.connected=false;admin.token='';admin.actor='';admin.audit=[];admin.control=[];pricingDrafts.clear();sessionStorage.removeItem('sten_admin_token');sessionStorage.removeItem('sten_admin_actor');renderAll();toast('Администратор отключён.');}
   function goAdmin(message=''){setActiveTab('admin');if(message)toast(message,'error');}
 
   async function addMaterial(e){
@@ -482,6 +529,7 @@
     $('#resetBtn').onclick=()=>{state=defaultState(model.defaults);saveState();renderAll();toast('Параметры возвращены к текущим значениям Google Sheets.');};
     $('#instructionBtn').onclick=openInstruction;$('#footerInstructionBtn').onclick=openInstruction;$('#instructionCloseBtn').onclick=closeInstruction;$('#instructionDialog').addEventListener('click',e=>{if(e.target===$('#instructionDialog'))closeInstruction();});
     $('#adminLoginBtn').onclick=adminLogin;$('#adminLogoutBtn').onclick=adminLogout;
+    $('#saveAllPricingBtn').onclick=saveAllReferenceChanges;
     ['priceSearch','priceType','pricePurchase'].forEach(id=>document.getElementById(id).addEventListener(id==='priceSearch'?'input':'change',renderPricing));
     $('#historySearch').addEventListener('input',renderHistoryPicker);$('#historyGrouping').addEventListener('change',()=>{if(historyData)renderPriceCharts();});$('#loadHistoryBtn').onclick=loadPriceHistory;
     $('#certificateSearch').addEventListener('input',renderCertificates);
@@ -490,6 +538,7 @@
     $$('.system-action').forEach(b=>b.onclick=()=>systemAction(b.dataset.action));
     $$('.seg').forEach(b=>b.onclick=()=>{admin.view=b.dataset.systemView;$$('.seg').forEach(x=>x.classList.toggle('active',x===b));renderSystemOutput();});
     window.addEventListener('resize',()=>{if(historyData)requestAnimationFrame(renderPriceCharts);});
+    window.addEventListener('beforeunload',e=>{if(collectPricingChanges().length){e.preventDefault();e.returnValue='';}});
   }
 
   bindStaticEvents();
