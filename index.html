@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0072CE">
-  <title>СТЕН·МАСТЕР v3.8 — веб-калькулятор</title>
+  <title>СТЕН·МАСТЕР v3.8.3 — веб-калькулятор</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Unbounded:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -19,7 +19,7 @@
         <div class="brand-title">СТЕН·МАСТЕР</div>
         <div class="brand-subtitle">веб-калькулятор конструктивных решений</div>
       </div>
-      <span class="version-pill">v3.8 WEB</span>
+      <span class="version-pill">v3.8.3 WEB</span>
     </div>
     <div class="top-actions">
       <div class="sync-state" id="syncState"><span class="status-dot"></span><span id="syncText">локальная модель</span></div>
@@ -96,7 +96,11 @@
       <article class="card pricing-card">
         <div class="card-head pricing-head">
           <div><span class="eyebrow">05</span><h2>Централизованные расценки</h2><p class="muted">Материалы: цена с НДС и доставкой. Доставка в расчёте показывается справочно и не прибавляется к сценарию.</p></div>
-          <button class="btn btn-outline" id="pricingAdminBtn" type="button">⚙ Открыть администрирование</button>
+          <div class="pricing-actions">
+            <span class="save-hint" id="pricingSaveHint">Все изменения сохранены</span>
+            <button class="btn btn-primary hidden" id="saveAllPricingBtn" type="button">💾 Сохранить все изменения <span class="save-count" id="pricingDirtyCount">0</span></button>
+            <button class="btn btn-outline" id="pricingAdminBtn" type="button">⚙ Открыть администрирование</button>
+          </div>
         </div>
         <div class="toolbar">
           <div class="search-box"><input type="search" id="priceSearch" placeholder="Поиск по коду или наименованию"></div>
@@ -230,7 +234,7 @@
 
   <div class="toast-stack" id="toastStack"></div>
   <footer>
-    <span>СТЕН·МАСТЕР v3.8 WEB · расчётная модель: Google Sheets v3.7</span>
+    <span>СТЕН·МАСТЕР v3.8.3 WEB · расчётная модель: Google Sheets v3.7</span>
     <button class="footer-link" id="footerInstructionBtn" type="button">ℹ Инструкция по работе с калькулятором</button>
   </footer>
 </div>
