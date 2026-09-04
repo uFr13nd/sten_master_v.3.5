@@ -152,3 +152,7 @@ pass: true
 passed: 186
 total: 186
 ```
+
+
+## v3.8.1 hotfix
+GitHub Pages communicates with Apps Script through a hidden HTML form + postMessage bridge. This avoids the Apps Script ContentService CORS redirect that causes `Failed to fetch` in cross-origin `fetch()`.
