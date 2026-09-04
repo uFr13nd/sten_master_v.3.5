@@ -7,6 +7,9 @@
   const STORAGE_KEY = 'sten-master-web-v38-state';
   const OLD_STORAGE_KEY = 'sten-master-web-v35-state';
   const MAX_CERT_BYTES = 8 * 1024 * 1024;
+  const BRIDGE_CHANNEL = 'sten-master-v38';
+  const BRIDGE_TIMEOUT = 120000;
+
 
   let model = clone(FALLBACK);
   let sourceMode = 'fallback';
@@ -421,13 +424,43 @@
 
   function setActiveTab(tab,save=true){state.activeTab=tab;if(save)saveState();$$('.tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===tab));$$('.tab-panel').forEach(x=>x.classList.toggle('active',x.dataset.panel===tab));if(tab==='analytics'&&!historyData)renderHistoryPicker();if(tab==='certificates')renderCertificates();if(tab==='admin')renderAdmin();}
 
+  const bridgePending = new Map();
+  window.addEventListener('message',e=>{
+    let trusted=false;
+    try{const host=new URL(e.origin).hostname;trusted=e.origin==='https://script.google.com'||host==='script.google.com'||host.endsWith('.googleusercontent.com');}catch{trusted=e.origin==='null';}
+    if(!trusted) return;
+    const d=e.data||{};if(d.channel!==BRIDGE_CHANNEL||!d.id)return;
+    const pending=bridgePending.get(String(d.id));if(!pending)return;
+    bridgePending.delete(String(d.id));clearTimeout(pending.timer);pending.cleanup();pending.resolve(d.response);
+  });
+
+  function bridgeId(){
+    if(window.crypto&&crypto.getRandomValues){const a=new Uint32Array(4);crypto.getRandomValues(a);return Array.from(a,x=>x.toString(16).padStart(8,'0')).join('');}
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function apiCall(payload){
+    const id=bridgeId(),frameName=`sten_api_${id}`;
+    return new Promise((resolve,reject)=>{
+      const iframe=document.createElement('iframe');iframe.name=frameName;iframe.title='STEN MASTER API';iframe.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;border:0;left:-9999px;top:-9999px';
+      const form=document.createElement('form');form.method='POST';form.action=API_URL;form.target=frameName;form.style.display='none';
+      const fields={bridge:'1',requestId:id,origin:location.origin,payload:JSON.stringify(payload)};
+      Object.entries(fields).forEach(([name,value])=>{const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.appendChild(input);});
+      const cleanup=()=>{setTimeout(()=>{form.remove();iframe.remove();},0);};
+      const timer=setTimeout(()=>{bridgePending.delete(id);cleanup();reject(new Error('Превышено время ожидания Apps Script.'));},BRIDGE_TIMEOUT);
+      bridgePending.set(id,{resolve,reject,timer,cleanup});
+      document.body.appendChild(iframe);document.body.appendChild(form);
+      try{form.submit();}catch(err){bridgePending.delete(id);clearTimeout(timer);cleanup();reject(err);}
+    });
+  }
+
   async function syncFromSheets(){
     setSync('loading','Синхронизация…');
-    try{const resp=await fetch(`${API_URL}?action=bootstrap&force=1&_=${Date.now()}`,{cache:'no-store'});if(!resp.ok)throw new Error(`HTTP ${resp.status}`);const data=await resp.json();if(!data.ok||!data.constructions||!data.works)throw new Error(data.error||'Неверный ответ API');if(!String(data.apiVersion||'').startsWith('3.8'))throw new Error('Backend Apps Script ещё не обновлён до v3.8');applyRemoteModel(data);sourceMode='api';renderAll();setSync('online','Google Sheets · '+new Date(data.timestamp).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}));toast('Данные синхронизированы с Google Sheets.','success');}catch(err){sourceMode='fallback';setSync('offline','Fallback v3.8 · Google Sheets v3.7');toast(`Синхронизация: ${err.message}`,'error');}
+    try{const data=await apiCall({action:'bootstrap',force:1});if(!data.ok||!data.constructions||!data.works)throw new Error(data.error||'Неверный ответ API');if(!String(data.apiVersion||'').startsWith('3.8'))throw new Error('Backend Apps Script ещё не обновлён до v3.8');applyRemoteModel(data);sourceMode='api';renderAll();setSync('online','Google Sheets · '+new Date(data.timestamp).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}));toast('Данные синхронизированы с Google Sheets.','success');}catch(err){sourceMode='fallback';setSync('offline','Fallback v3.8 · Google Sheets v3.7');toast(`Синхронизация: ${err.message}`,'error');}
   }
   function applyRemoteModel(data){const baseline=data.baseline||model.baseline||FALLBACK.baseline;model={...data,baseline,certificates:data.certificates||[]};validateState();}
 
-  async function apiPost(payload){const r=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'});const text=await r.text();try{return JSON.parse(text);}catch{throw new Error('Web API вернул не-JSON ответ. Проверьте deployment Apps Script.');}}
+  async function apiPost(payload){return apiCall(payload);}
   function setSync(mode,text){const el=$('#syncState');el.className='sync-state '+(mode==='online'?'':mode==='loading'?'offline':mode==='offline'?'offline':'error');$('#syncText').textContent=text;}
   function setBusy(v){$$('button').forEach(b=>{if(!['resetBtn','instructionCloseBtn'].includes(b.id))b.disabled=v;});}
   function toast(msg,type=''){const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;$('#toastStack').appendChild(el);setTimeout(()=>el.remove(),4500);}
