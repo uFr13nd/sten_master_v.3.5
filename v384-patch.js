@@ -1,9 +1,10 @@
 (() => {
   'use strict';
 
-  const API_URL = 'https://script.google.com/macros/s/AKfycbwvCgR_FeVh3QkKc6u1UaxYkAFQbQkFJ6j39XxsRHeoOfTHBJHW02hTpgvRIoI-r5kD/exec';
+  const API_URL = window.STEN_CONFIG?.API_URL || 'https://script.google.com/macros/s/AKfycbwvCgR_FeVh3QkKc6u1UaxYkAFQbQkFJ6j39XxsRHeoOfTHBJHW02hTpgvRIoI-r5kD/exec';
   const CHANNEL = 'sten-master-v38';
   const TIMEOUT = 30000;
+  const JSONP_TIMEOUT = 30000;
   const pending = new Map();
   let bootstrapData = null;
   let pricingObserver = null;
@@ -37,6 +38,23 @@
     item.cleanup();
     item.resolve(data.response || {ok:false,error:'Пустой ответ Web API'});
   });
+
+  function apiGetJsonp(action, params = {}) {
+    const id = requestId().replace(/[^A-Za-z0-9_]/g, '');
+    const cb = `__stenPatchJsonp_${id}`;
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      const cleanup = () => { clearTimeout(timer); delete window[cb]; script.remove(); };
+      const timer = setTimeout(() => { cleanup(); reject(new Error('GET bootstrap не ответил.')); }, JSONP_TIMEOUT);
+      window[cb] = data => { cleanup(); resolve(data); };
+      const q = new URLSearchParams({action, callback:cb, _:String(Date.now())});
+      Object.entries(params || {}).forEach(([k,v]) => q.set(k, String(v)));
+      script.src = `${API_URL}?${q.toString()}`;
+      script.async = true;
+      script.onerror = () => { cleanup(); reject(new Error('GET bootstrap недоступен.')); };
+      document.head.appendChild(script);
+    });
+  }
 
   function apiCall(payload) {
     const id = requestId();
@@ -200,7 +218,7 @@
 
   async function loadBootstrap(silent = false) {
     try {
-      const data = await apiCall({action:'bootstrap', force:1});
+      const data = await apiGetJsonp('bootstrap', {force:1});
       if (!data || !data.ok) throw new Error(data?.error || 'Web API вернул ошибку');
       bootstrapData = data;
       patchPricingTable();

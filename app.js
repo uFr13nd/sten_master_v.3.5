@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const API_URL = 'https://script.google.com/macros/s/AKfycbycm7-F4_Go9kNuFz34hTC1yWvDxDkQe1WkfwXAJgQXQaOi9fiWibtjqt9h63lRJf0A/exec';
+  const API_URL = window.STEN_CONFIG?.API_URL || 'https://script.google.com/macros/s/AKfycbwvCgR_FeVh3QkKc6u1UaxYkAFQbQkFJ6j39XxsRHeoOfTHBJHW02hTpgvRIoI-r5kD/exec';
   const FALLBACK = window.STEN_FALLBACK_DATA;
   const Engine = window.StenEngine;
   const STORAGE_KEY = 'sten-master-web-v38-state';
@@ -9,6 +9,7 @@
   const MAX_CERT_BYTES = 8 * 1024 * 1024;
   const BRIDGE_CHANNEL = 'sten-master-v38';
   const BRIDGE_TIMEOUT = 120000;
+  const JSONP_TIMEOUT = 30000;
 
 
   let model = clone(FALLBACK);
@@ -31,6 +32,12 @@
   const fmtN = (v, d=2) => new Intl.NumberFormat('ru-RU',{maximumFractionDigits:d,minimumFractionDigits:0}).format(Number(v)||0);
   const fmtRub = (v, d=0) => new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',maximumFractionDigits:d,minimumFractionDigits:d}).format(Number(v)||0);
   const fmtSigned = (v, unit='') => `${Number(v)>0?'+':''}${fmtN(v,2)}${unit}`;
+  const fmtDate = (v, withTime=false) => {
+    if(!v) return '';
+    const d=new Date(v); if(Number.isNaN(d.getTime())) return '';
+    return d.toLocaleString('ru-RU',withTime?{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}:{day:'2-digit',month:'2-digit',year:'numeric'});
+  };
+  const daysOld = v => { const d=new Date(v); return Number.isNaN(d.getTime())?null:Math.max(0,Math.floor((Date.now()-d.getTime())/86400000)); };
   const finishOptions = ['Без отделки','Предчистовая','Чистовая'];
   const catMeta = {
     ext:{label:'Наружные стены',icon:'🧱',unit:'м³',priceUnit:'₽/м³'},
@@ -263,7 +270,7 @@
     rows=rows.filter(x=>(!q || `${x.code} ${x.name} ${x.technicalGroup}`.toLowerCase().includes(q)) && (purchase==='all'||x.purchaseGroup===purchase));
     const techGroups=[...new Set((model.materials||[]).map(x=>x.technicalGroup).filter(Boolean))].sort();
     const workGroups=[...new Set((model.works||[]).map(x=>x.technicalGroup).filter(Boolean))].sort();
-    $('#pricingTable').innerHTML=`<table class="data-table"><thead><tr><th>Код</th><th>Наименование</th><th>Ед.</th><th>${type==='works'?'Цена':'Цена с НДС и доставкой'}</th><th>Группа</th><th>Закупка</th><th>Где используется</th></tr></thead><tbody>${rows.map(x=>{
+    $('#pricingTable').innerHTML=`<table class="data-table"><thead><tr><th>Код</th><th>Наименование</th><th>Ед.</th><th>${type==='works'?'Цена':'Цена с НДС и доставкой'}</th><th data-v384-price-date-head="1">Цена изменена</th><th>Группа</th><th>Закупка</th><th>Где используется</th></tr></thead><tbody>${rows.map(x=>{
       const strategic=x.purchaseGroup==='Стратегические материалы';
       const groups=x._kind==='works'?workGroups:techGroups;
       const price=pricingDraftValue(x.code,'price',x.price), technicalGroup=pricingDraftValue(x.code,'technicalGroup',x.technicalGroup), purchaseGroup=pricingDraftValue(x.code,'purchaseGroup',x.purchaseGroup);
@@ -271,6 +278,7 @@
       return `<tr class="${strategic?'strategic-row ':''}${rowDirty?'dirty-row':''}" data-price-row="${esc(x.code)}" data-kind="${x._kind}">
         <td>${esc(x.code)}</td><td>${esc(x.name)}</td><td>${esc(x.unit)}</td>
         <td>${admin.connected?`<input class="editable price-input" data-field="price" type="number" step="0.01" value="${esc(price)}">`:`<span class="num">${fmtRub(x.price,2)}</span>`}</td>
+        <td data-v384-price-date="1" class="price-date-cell">${x.changedAt?`<span class="price-date ${daysOld(x.changedAt)>35?'stale':''}" title="${esc(fmtDate(x.changedAt,true))}">${esc(fmtDate(x.changedAt))}${daysOld(x.changedAt)!=null?` · ${daysOld(x.changedAt)} дн.`:''}</span>`:'<span class="price-date none">не зафиксировано</span>'}</td>
         <td>${admin.connected?`<select class="editable group-select" data-field="technicalGroup">${groups.map(g=>`<option ${g===technicalGroup?'selected':''}>${esc(g)}</option>`).join('')}</select>`:esc(x.technicalGroup)}</td>
         <td>${x._kind==='materials'?(admin.connected?`<select class="editable group-select" data-field="purchaseGroup"><option ${purchaseGroup==='Обычные материалы'?'selected':''}>Обычные материалы</option><option ${purchaseGroup==='Стратегические материалы'?'selected':''}>Стратегические материалы</option></select>`:(strategic?'<span class="badge strategic">Стратегический</span>':'Обычный')):'—'}</td>
         <td title="${esc(x.usage||'')}">${esc(shortUsage(x.usage))}</td>
@@ -486,6 +494,29 @@
     return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
   }
 
+  function apiGetJsonp(action,params={}){
+    const id=bridgeId().replace(/[^A-Za-z0-9_]/g,'');
+    const cb=`__stenJsonp_${id}`;
+    return new Promise((resolve,reject)=>{
+      const script=document.createElement('script');
+      const cleanup=()=>{clearTimeout(timer);delete window[cb];script.remove();};
+      const timer=setTimeout(()=>{cleanup();reject(new Error('GET bootstrap: превышено время ожидания Apps Script.'));},JSONP_TIMEOUT);
+      window[cb]=data=>{cleanup();resolve(data);};
+      const q=new URLSearchParams({action,callback:cb,_:String(Date.now())});
+      Object.entries(params||{}).forEach(([k,v])=>q.set(k,String(v)));
+      script.src=`${API_URL}?${q.toString()}`;
+      script.async=true;
+      script.onerror=()=>{cleanup();reject(new Error('Не удалось загрузить bootstrap из Apps Script.'));};
+      document.head.appendChild(script);
+    });
+  }
+
+  async function loadBootstrapRemote(){
+    // Public bootstrap is intentionally JSONP-only. It avoids CORS and iframe
+    // callback failures and prevents the header from hanging for two minutes.
+    return apiGetJsonp('bootstrap',{force:1});
+  }
+
   function apiCall(payload){
     const id=bridgeId(),frameName=`sten_api_${id}`;
     return new Promise((resolve,reject)=>{
@@ -503,9 +534,27 @@
 
   async function syncFromSheets(){
     setSync('loading','Синхронизация…');
-    try{const data=await apiCall({action:'bootstrap',force:1});if(!data.ok||!data.constructions||!data.works)throw new Error(data.error||'Неверный ответ API');if(!String(data.apiVersion||'').startsWith('3.8'))throw new Error('Backend Apps Script ещё не обновлён до v3.8');applyRemoteModel(data);sourceMode='api';renderAll();setSync('online','Google Sheets · '+new Date(data.timestamp).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}));toast('Данные синхронизированы с Google Sheets.','success');}catch(err){sourceMode='fallback';setSync('offline','Fallback v3.8 · Google Sheets v3.7');toast(`Синхронизация: ${err.message}`,'error');}
+    try{
+      const data=await loadBootstrapRemote();
+      if(!data||!data.ok||!data.constructions||!data.works)throw new Error(data?.error||'Неверный ответ API');
+      if(!String(data.apiVersion||'').startsWith('3.8.4'))throw new Error(`Ожидался backend 3.8.4, получен ${data.apiVersion||'без версии'}`);
+      applyRemoteModel(data);sourceMode='api';renderAll();
+      const t=data.timestamp?new Date(data.timestamp).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'';
+      setSync('online','Google Sheets'+(t?' · '+t:''));
+      renderPriceUpdateHeader();
+      toast('Данные синхронизированы с Google Sheets.','success');
+    }catch(err){
+      sourceMode='fallback';setSync('offline','Fallback v3.8 · API недоступен');renderPriceUpdateHeader();toast(`Синхронизация: ${err.message}`,'error');
+    }
   }
-  function applyRemoteModel(data){const baseline=data.baseline||model.baseline||FALLBACK.baseline;model={...data,baseline,certificates:data.certificates||[]};validateState();}
+  function applyRemoteModel(data){const baseline=data.baseline||model.baseline||FALLBACK.baseline;model={...data,baseline,certificates:data.certificates||[]};validateState();renderPriceUpdateHeader();}
+
+  function renderPriceUpdateHeader(){
+    const el=$('#priceUpdatedText'); if(!el)return;
+    const value=model&&model.lastPriceUpdate;
+    el.textContent=value&&fmtDate(value,true)?`Цены обновлены: ${fmtDate(value,true)}`:'Дата обновления цен: не зафиксирована';
+    el.title=value?String(value):'';
+  }
 
   async function apiPost(payload){return apiCall(payload);}
   function setSync(mode,text){const el=$('#syncState');el.className='sync-state '+(mode==='online'?'':mode==='loading'?'offline':mode==='offline'?'offline':'error');$('#syncText').textContent=text;}
@@ -543,6 +592,7 @@
 
   bindStaticEvents();
   renderAll();
-  setSync('offline','Fallback v3.8 · Google Sheets v3.7');
+  setSync('offline','Fallback v3.8 · API не подключён');
+  renderPriceUpdateHeader();
   syncFromSheets();
 })();
